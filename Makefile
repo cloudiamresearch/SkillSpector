@@ -1,4 +1,4 @@
-.PHONY: help install install-dev langgraph-dev test test-unit test-integration test-cov test-ci lint lint-fix format format-check clean build
+.PHONY: help install install-dev langgraph-dev test test-unit test-integration test-cov test-ci lint lint-fix format format-check clean build docker-build
 
 # Prefer uv if available, else use pip (set when Makefile is parsed)
 UV := $(shell command -v uv 2>/dev/null)
@@ -24,6 +24,7 @@ help:
 	@echo "  make format-check   - Check code formatting with ruff"
 	@echo "  make clean          - Remove build artifacts and cache files"
 	@echo "  make build          - Build the package"
+	@echo "  make docker-build   - Build the Docker image"
 
 install:
 	@if [ -n "$(UV)" ]; then uv sync; else pip install -e .; fi
@@ -93,4 +94,9 @@ clean:
 # Build the package
 build: clean
 	python -m build
+
+# Build the Docker image
+docker-build:
+	docker build -t skillspector .
+
 

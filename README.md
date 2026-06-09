@@ -47,6 +47,40 @@ make install
 make install-dev
 ```
 
+### Docker (no Python required)
+
+Run SkillSpector without installing Python by pulling the pre-built image or building it locally from the included [Dockerfile](Dockerfile). The image is based on [Chainguard's minimal Python image](https://images.chainguard.dev/directory/image/python/versions), which has a near-zero CVE footprint.
+
+**Build the image:**
+
+```bash
+docker build -t skillspector .
+```
+
+**Scan a local directory** (mount it into `/scan`, which is the container's working directory):
+
+```bash
+docker run --rm -v "$(pwd)/my-skill:/scan/my-skill" skillspector scan ./my-skill/
+```
+
+**Scan with LLM analysis** (pass credentials as environment variables):
+
+```bash
+docker run --rm \
+  -v "$(pwd)/my-skill:/scan/my-skill" \
+  -e SKILLSPECTOR_PROVIDER=anthropic \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  skillspector scan ./my-skill/
+```
+
+**Write a report to the host filesystem:**
+
+```bash
+docker run --rm \
+  -v "$(pwd):/scan" \
+  skillspector scan ./my-skill/ --format json --output report.json
+```
+
 ### Basic Usage
 
 ```bash
@@ -88,7 +122,7 @@ local OpenAI-compatible servers (Ollama, vLLM, llama.cpp) and managed
 inference gateways.
 
 | Provider (`SKILLSPECTOR_PROVIDER`) | Credential env var | Endpoint | Default model |
-|----------|----|----|----|
+| ---------- | ---- | ---- | ---- |
 | `openai` | `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`) | api.openai.com (or any OpenAI-compatible URL) | `gpt-5.4` |
 | `anthropic` | `ANTHROPIC_API_KEY` | api.anthropic.com | `claude-opus-4-6` |
 | `nv_build` | `NVIDIA_INFERENCE_KEY` | build.nvidia.com | `deepseek-ai/deepseek-v4-flash` |
