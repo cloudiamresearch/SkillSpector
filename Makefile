@@ -1,4 +1,4 @@
-.PHONY: help install install-dev langgraph-dev test test-unit test-integration test-cov test-ci lint lint-fix format format-check clean build docker-build
+.PHONY: help install install-dev langgraph-dev test test-unit test-integration test-cov test-ci lint lint-fix format format-check clean build docker-build docker-smoke
 
 # Prefer uv if available, else use pip (set when Makefile is parsed)
 UV := $(shell command -v uv 2>/dev/null)
@@ -25,6 +25,7 @@ help:
 	@echo "  make clean          - Remove build artifacts and cache files"
 	@echo "  make build          - Build the package"
 	@echo "  make docker-build   - Build the Docker image"
+	@echo "  make docker-smoke   - Build and smoke test the Docker image"
 
 install:
 	@if [ -n "$(UV)" ]; then uv sync; else pip install -e .; fi
@@ -99,3 +100,6 @@ build: clean
 docker-build:
 	docker build -t skillspector .
 
+# Build and smoke test the Docker image
+docker-smoke: docker-build
+	tests/docker/smoke.sh
