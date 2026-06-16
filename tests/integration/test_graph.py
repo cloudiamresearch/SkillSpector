@@ -25,10 +25,12 @@ from skillspector.graph import graph
 
 def test_graph_invoke_with_output_format_json(tmp_path: Path) -> None:
     """Invoking with output_format=json yields report_body as valid JSON with skill and risk_assessment."""
+    (tmp_path / "SKILL.md").write_text("---\nname: test\n---\n# Hi", encoding="utf-8")
     result = graph.invoke(
         {
             "skill_path": str(tmp_path),
             "output_format": "json",
+            "use_llm": False,
         }
     )
     body = result.get("report_body", "")
@@ -42,7 +44,7 @@ def test_graph_invoke_with_output_format_json(tmp_path: Path) -> None:
 
 def test_graph_invoke_returns_findings_and_report(tmp_path: Path) -> None:
     """Graph runs to completion; returns findings, SARIF report, report_body, risk_score."""
-    result = graph.invoke({"skill_path": str(tmp_path)})
+    result = graph.invoke({"skill_path": str(tmp_path), "use_llm": False})
 
     assert "findings" in result
     assert isinstance(result["findings"], list)
@@ -60,5 +62,6 @@ def test_graph_invalid_skill_path_raises() -> None:
             {
                 "skill_path": "/nonexistent/path/xyz",
                 "output_format": "json",
+                "use_llm": False,
             }
         )
