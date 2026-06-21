@@ -174,16 +174,21 @@ def _validate_model_label(model: str) -> str:
 def _build_claude_argv(binary: str, model: str, max_output_tokens: int) -> list[str]:
     """Build the argv list for a capability-stripped ``claude -p`` call.
 
-    Flags chosen (verified end-to-end against ``claude`` v2.1.177 — each was
-    confirmed to parse AND to authenticate and return a result):
-
     ``-p`` / ``--print``
         Non-interactive single-shot mode. The prompt is read from stdin;
         the response is written to stdout and the process exits.
 
-    ``--output-format json``
-        Emit a single JSON object (not a stream) so we can parse it
-        deterministically.
+    ``--output-format text``
+        Emit the assistant's response as plain text — nothing else.  This is
+        the most stable format the claude CLI offers: it has been the canonical
+        headless contract since ``-p`` was introduced, predates the JSON
+        envelope formats, and is unaffected by changes to the event-stream
+        schema.  The envelope formats (``json`` / ``stream-json``) have changed
+        shape across builds (single dict → JSON array → JSONL); ``text`` never
+        has.  Because we need only the response text and not the metadata
+        (session ID, stop reason, etc.) that the envelope carries, ``text`` is
+        the right choice here: the format we request defines exactly what we
+        parse, with no version detection and no fallbacks.
 
     ``--model <label>``
         Use the requested model. ``--model`` is a known flag, so the label
@@ -224,7 +229,7 @@ def _build_claude_argv(binary: str, model: str, max_output_tokens: int) -> list[
         binary,
         "-p",
         "--output-format",
-        "json",
+        "text",
         *model_arg,
         "--allowed-tools",
         "",
@@ -236,40 +241,21 @@ def _build_claude_argv(binary: str, model: str, max_output_tokens: int) -> list[
 
 
 def _parse_claude_output(raw: str) -> str:
-    """Extract assistant text from ``claude --output-format json`` output.
+    """Return the assistant text from ``claude -p --output-format text`` stdout.
 
-    The JSON envelope has shape::
-
-        {
-          "type": "result",
-          "result": "<assistant text>",
-          ...
-        }
+    With ``--output-format text`` the claude CLI writes only the response to
+    stdout and nothing else, so no parsing is required: the contract is the
+    format flag itself.  The only failure case is an empty response (which
+    indicates an auth failure, rate-limit, or other non-zero-exit scenario
+    that the caller's fail-closed checks should have already caught).
 
     Raises:
-        AgentCLIError: when the envelope is missing or malformed.
+        AgentCLIError: when stdout is empty.
     """
-    raw = raw.strip()
-    if not raw:
+    text = raw.strip()
+    if not text:
         raise AgentCLIError("claude returned empty stdout; cannot extract assistant response")
-    try:
-        envelope: Any = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise AgentCLIError(f"claude output is not valid JSON: {exc}; raw={raw[:200]!r}") from exc
-
-    if not isinstance(envelope, dict):
-        raise AgentCLIError(
-            f"expected a JSON object from claude, got {type(envelope).__name__}: {raw[:200]!r}"
-        )
-
-    # The -p/--output-format json envelope uses "result" for the text.
-    if "result" in envelope:
-        return str(envelope["result"])
-
-    raise AgentCLIError(
-        f"claude JSON envelope missing 'result' key; keys={list(envelope.keys())!r}; "
-        f"raw={raw[:200]!r}"
-    )
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -424,9 +410,15 @@ def _build_gemini_argv(binary: str, model: str, max_output_tokens: int = 0) -> l
 def _parse_gemini_output(raw: str) -> str:
     """Extract assistant text from ``gemini -o json`` output.
 
-    Verified against gemini 0.46.0, which returns a top-level ``response`` key
-    (alongside ``session_id`` / ``stats``). Other common keys and a plain-text
-    fallback are accepted for resilience.
+    ``gemini -o json`` returns a JSON object with a ``response`` key
+    (alongside ``session_id`` / ``stats``).  Other common keys are accepted
+    for resilience across minor gemini CLI versions.  When JSON parsing fails
+    entirely, the raw stdout is returned as-is (gemini may fall back to plain
+    text in some error states, and returning it is better than raising and
+    dropping the whole analysis).
+
+    Raises:
+        AgentCLIError: on empty stdout only.
     """
     text = raw.strip()
     if not text:
@@ -434,7 +426,7 @@ def _parse_gemini_output(raw: str) -> str:
     try:
         obj: Any = json.loads(text)
     except json.JSONDecodeError:
-        return text  # assume plain-text mode
+        return text  # plain-text fallback (non-JSON gemini output)
     if isinstance(obj, dict):
         for key in ("response", "text", "content", "result", "output"):
             value = obj.get(key)
@@ -494,13 +486,15 @@ def _gemini_auth_check(binary: str) -> tuple[bool, str | None]:
 # Antigravity CLI  (registered but DISABLED — verified incompatible)
 #
 # The Antigravity CLI (binary: ``agy``) was tested end-to-end against the real
-# binary (agy 0.x, logged in). It CANNOT be driven programmatically and so is
-# kept fail-closed:
+# binary (agy 0.x and re-verified on agy 1.0.10, logged in). It CANNOT be driven
+# programmatically and so is kept fail-closed:
 #   * Its ``--print`` / ``--prompt`` mode renders the response to the TTY only.
 #     With stdout captured via a pipe (exactly how run_agent_cli must invoke it),
-#     it exits 0 with EMPTY stdout — the response never reaches us. (Confirmed
-#     across --sandbox/no-sandbox and --print/--prompt; the agy log shows the
-#     backend call succeeds, but agy is a TTY/language-server app, not a
+#     it HANGS and returns EMPTY stdout (and empty stderr) — the response never
+#     reaches us. (On 1.0.10, `agy --print` produced 0 bytes of stdout and did
+#     not honour even `--print-timeout 30s`, requiring an external kill; its
+#     `--help` still exposes only TTY-oriented --print/--prompt with no headless
+#     JSON-stdout mode. agy remains a TTY/language-server app, not a
 #     stdin->stdout filter like claude/codex/gemini ``-p``.)
 #   * It also takes the prompt as an argv VALUE, not stdin — at odds with our
 #     "untrusted content via stdin, never argv" rule and bounded by OS argv size.
@@ -525,23 +519,6 @@ def _build_agy_argv(binary: str, model: str, max_output_tokens: int = 0) -> list
         "renders to a TTY and returns empty stdout on a pipe; refusing to run. "
         "Its backend is Gemini — use SKILLSPECTOR_PROVIDER=gemini_cli instead."
     )
-
-
-def _parse_agy_output(raw: str) -> str:
-    """Best-effort parse for ``agy`` structured output (unused while disabled)."""
-    text = raw.strip()
-    if not text:
-        raise AgentCLIError("agy returned empty stdout")
-    try:
-        obj: Any = json.loads(text)
-    except json.JSONDecodeError:
-        return text
-    if isinstance(obj, dict):
-        for key in ("response", "text", "content", "result", "output"):
-            value = obj.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
-    return text
 
 
 def _agy_auth_check(binary: str) -> tuple[bool, str | None]:
@@ -586,8 +563,10 @@ _REGISTRY: dict[str, CliSpec] = {
     "claude": CliSpec("claude", _build_claude_argv, _parse_claude_output, _claude_auth_check),
     "codex": CliSpec("codex", _build_codex_argv, _parse_codex_output, _codex_auth_check),
     "gemini": CliSpec("gemini", _build_gemini_argv, _parse_gemini_output, _gemini_auth_check),
-    # Scaffolded; fails closed until `agy --help` is verified (see note above).
-    "agy": CliSpec("agy", _build_agy_argv, _parse_agy_output, _agy_auth_check),
+    # Disabled (fails closed via _build_agy_argv). agy's backend is Gemini, so it
+    # reuses _parse_gemini_output rather than duplicating it — though parse is
+    # never reached while _build_agy_argv raises. See the antigravity note above.
+    "agy": CliSpec("agy", _build_agy_argv, _parse_gemini_output, _agy_auth_check),
 }
 
 
