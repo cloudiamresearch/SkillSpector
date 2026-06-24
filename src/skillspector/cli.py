@@ -59,6 +59,13 @@ class FormatChoice(StrEnum):
     sarif = "sarif"
 
 
+class TransportChoice(StrEnum):
+    """Transport choices for the MCP server."""
+
+    stdio = "stdio"
+    http = "http"
+
+
 def version_callback(value: bool) -> None:
     """Print version and exit."""
     if value:
@@ -403,6 +410,49 @@ def _scan_multi_skill(
 
     if max_score > 50:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def mcp(
+    transport: Annotated[
+        TransportChoice,
+        typer.Option(
+            "--transport",
+            "-t",
+            help="Transport: stdio for local CLI agents, http for remote/A2A callers.",
+            case_sensitive=False,
+        ),
+    ] = TransportChoice.stdio,
+    host: Annotated[
+        str,
+        typer.Option("--host", help="Host to bind (http transport only)."),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option("--port", help="Port to bind (http transport only)."),
+    ] = 8000,
+) -> None:
+    """
+    Run SkillSpector as an MCP server.
+
+    Exposes a single tool, ``scan_skill``, so any MCP-capable agent (Claude Code,
+    Codex CLI, Gemini CLI) or remote runtime can scan a skill and gate installs
+    on the verdict.
+
+    Examples:
+
+        skillspector mcp                      # stdio (local agents)
+        skillspector mcp --transport http --port 8000
+
+    Requires the optional ``mcp`` dependency: pip install "skillspector[mcp]".
+    """
+    try:
+        from skillspector.mcp_server import run as run_mcp
+
+        run_mcp(transport=transport.value, host=host, port=port)
+    except ModuleNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=2) from e
 
 
 @app.command()
