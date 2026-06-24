@@ -38,7 +38,7 @@ def resolve_input(state: SkillspectorState) -> dict[str, object]:
     - If state has non-empty input_path: resolve it (Git URL, file URL, zip, file, or directory)
       and set skill_path. If resolution created a temp dir, set temp_dir_for_cleanup.
     - Else if state has skill_path: normalize to absolute path and set skill_path.
-    - Else: set skill_path to None (build_context will return minimal state).
+    - Else: set skill_path to None (build_context will raise a user-facing error).
     """
     input_path = state.get("input_path")
     skill_path = state.get("skill_path")
@@ -65,7 +65,7 @@ def resolve_input(state: SkillspectorState) -> dict[str, object]:
                 "temp_dir_for_cleanup": None,
             }
         except (OSError, RuntimeError) as e:
-            logger.warning("Could not resolve skill_path %s: %s", skill_path, e)
+            logger.warning("Could not resolve skill_path: %s", e)
             return {"skill_path": None, "temp_dir_for_cleanup": None}
 
     return {"skill_path": None, "temp_dir_for_cleanup": None}

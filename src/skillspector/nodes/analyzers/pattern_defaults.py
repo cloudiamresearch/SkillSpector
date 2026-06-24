@@ -38,6 +38,9 @@ class PatternCategory(StrEnum):
     YARA_MATCH = "YARA Match"
     MCP_LEAST_PRIVILEGE = "MCP Least Privilege"
     MCP_TOOL_POISONING = "MCP Tool Poisoning"
+    AGENT_SNOOPING = "Agent Snooping"
+    SERVER_SIDE_REQUEST_FORGERY = "Server-Side Request Forgery"
+    ANTI_REFUSAL = "Anti-Refusal"
 
 
 # Pattern-specific explanations (why the finding is dangerous)
@@ -104,6 +107,7 @@ DEFAULT_EXPLANATIONS: dict[str, str] = {
     "AST6": "compile() creates code objects from strings. When combined with exec()/eval(), it enables obfuscated code execution.",
     "AST7": "Dynamic getattr() with a non-literal attribute name can access arbitrary object attributes, potentially bypassing access controls.",
     "AST8": "A dangerous execution chain combines code execution (exec/eval) with a dynamic source (network, encoded data, dynamic import), creating a high-confidence attack vector.",
+    "AST9": "Reflective access to an execution sink via getattr() with a constant name (e.g. getattr(os, 'system'), getattr(builtins, 'exec')) is functionally identical to a direct exec/os.system call but evades name-based detection. This is a deliberate evasion technique rather than idiomatic code.",
     # YARA (B.1.12)
     "YR1": "YARA rule matched a known malware signature (reverse shell, backdoor, ransomware, C2 framework, or info stealer).",
     "YR2": "YARA rule matched a known webshell pattern (PHP, Python, JSP, or ASPX webshell).",
@@ -119,6 +123,18 @@ DEFAULT_EXPLANATIONS: dict[str, str] = {
     "TP2": "Unicode deception detected in skill identifiers or descriptions. Homoglyphs, RTL overrides, or invisible characters can make malicious content appear benign.",
     "TP3": "Instruction injection patterns found in parameter descriptions or default values. Parameter metadata is read by LLMs and can override intended behavior.",
     "TP4": "Skill description does not match actual code behavior. The declared purpose diverges from what the code actually does, indicating possible deception.",
+    # Agent Snooping (AS1–AS3)
+    "AS1": "Skill reads from agent configuration directories (.claude/, .codex/, .gemini/). These directories may contain API keys, personal settings, and other credentials that the skill has no legitimate need to access.",
+    "AS2": "Skill accesses MCP server configuration files (mcp.json). MCP configs contain server URLs, authentication tokens, and tool definitions — reading them allows the skill to discover and potentially abuse other tool integrations.",
+    "AS3": "Skill enumerates or reads other installed skills. Access to other skills' SKILL.md files or the skills directory reveals prompt instructions, capabilities, and secrets that should be invisible to peer skills.",
+    # Server-Side Request Forgery (SSRF)
+    "SSRF1": "Code accesses a cloud instance metadata endpoint (e.g. 169.254.169.254). A single request can return temporary IAM credentials, making this a high-value SSRF target for credential theft.",
+    "SSRF2": "Code issues a request to a loopback, link-local, or private-range host. This can reach internal services not meant to be exposed and is a common SSRF pivot.",
+    "SSRF3": "Request target host is built from a dynamic or untrusted value. If the host is attacker-influenced, this enables SSRF to arbitrary internal or metadata endpoints.",
+    # Anti-Refusal Statements (jailbreak)
+    "AR1": "Skill instructs the agent to never refuse or to always comply. Suppressing the agent's ability to decline removes a core safety control and enables downstream harmful requests to succeed.",
+    "AR2": "Skill instructs the agent to omit warnings, disclaimers, or ethical commentary. Stripping safety caveats hides risk from the user and is a common jailbreak preamble.",
+    "AR3": "Skill attempts to nullify the agent's safety policies or restrictions ('you have no restrictions', 'ignore your guidelines', 'do anything now'). This is a direct jailbreak that disables guardrails.",
 }
 
 # Rule ID -> category (for report output)
@@ -182,6 +198,18 @@ RULE_ID_TO_CATEGORY: dict[str, str] = {
     "TP2": PatternCategory.MCP_TOOL_POISONING.value,
     "TP3": PatternCategory.MCP_TOOL_POISONING.value,
     "TP4": PatternCategory.MCP_TOOL_POISONING.value,
+    # Agent Snooping (AS1–AS3)
+    "AS1": PatternCategory.AGENT_SNOOPING.value,
+    "AS2": PatternCategory.AGENT_SNOOPING.value,
+    "AS3": PatternCategory.AGENT_SNOOPING.value,
+    # Server-Side Request Forgery
+    "SSRF1": PatternCategory.SERVER_SIDE_REQUEST_FORGERY.value,
+    "SSRF2": PatternCategory.SERVER_SIDE_REQUEST_FORGERY.value,
+    "SSRF3": PatternCategory.SERVER_SIDE_REQUEST_FORGERY.value,
+    # Anti-Refusal Statements (jailbreak)
+    "AR1": PatternCategory.ANTI_REFUSAL.value,
+    "AR2": PatternCategory.ANTI_REFUSAL.value,
+    "AR3": PatternCategory.ANTI_REFUSAL.value,
 }
 
 # Rule ID -> pattern display name (for report output)
@@ -245,6 +273,18 @@ PATTERN_NAMES: dict[str, str] = {
     "TP2": "Unicode Deception",
     "TP3": "Parameter Description Injection",
     "TP4": "Description-Behavior Mismatch",
+    # Agent Snooping (AS1–AS3)
+    "AS1": "Agent Config Directory Access",
+    "AS2": "MCP Config Access",
+    "AS3": "Skill Enumeration",
+    # Server-Side Request Forgery
+    "SSRF1": "Cloud Metadata Access",
+    "SSRF2": "Internal Network Request",
+    "SSRF3": "Dynamic Request Target",
+    # Anti-Refusal Statements (jailbreak)
+    "AR1": "Refusal Suppression",
+    "AR2": "Disclaimer Suppression",
+    "AR3": "Safety Policy Nullification",
 }
 
 # Pattern-specific remediations (how to fix the issue)
@@ -305,6 +345,7 @@ DEFAULT_REMEDIATIONS: dict[str, str] = {
     "AST6": "Avoid compile() with dynamic strings. If code generation is needed, use templates or AST manipulation with strict validation.",
     "AST7": "Replace dynamic getattr() with explicit attribute access or a dictionary lookup with an allowlist of permitted attributes.",
     "AST8": "Remove the execution chain entirely. Never pass network data, decoded bytes, or dynamically imported code to exec()/eval(). Use structured data formats instead.",
+    "AST9": "Call the function directly instead of reflectively (write exec(...) / os.system(...) explicitly), or remove it. If reflection is genuinely required, restrict it to an allowlist of safe attribute names that excludes execution sinks.",
     # Behavioral Taint Tracking (B.2.2)
     "TT1": "Add validation or sanitization between the data source and sink. Never pass raw source data directly to a sink without checking its content.",
     "TT2": "Validate tainted variables before passing them to sinks. Use allowlists, type checks, or sanitization functions on data from external sources.",
@@ -326,6 +367,18 @@ DEFAULT_REMEDIATIONS: dict[str, str] = {
     "TP2": "Replace non-ASCII characters in identifiers with ASCII equivalents. Remove RTL override and invisible formatting characters.",
     "TP3": "Remove injection patterns, system tokens, and suspicious content from parameter descriptions and default values.",
     "TP4": "Update the skill description to accurately reflect all capabilities, or remove undeclared functionality.",
+    # Agent Snooping (AS1–AS3)
+    "AS1": "Remove all code or instructions that access agent configuration directories (.claude/, .codex/, .gemini/). If configuration values are needed, pass them explicitly as parameters or environment variables — never read the agent's own config files.",
+    "AS2": "Remove all code or instructions that read MCP configuration files (mcp.json). MCP server details should be managed by the agent runtime, not read by individual skills.",
+    "AS3": "Remove all code or instructions that list or read other skills' files or directories. Skills should operate independently; cross-skill access is a privilege escalation.",
+    # Server-Side Request Forgery
+    "SSRF1": "Remove access to cloud metadata endpoints unless strictly required. If metadata is needed, restrict it (e.g. IMDSv2 with hop limit) and never expose returned credentials.",
+    "SSRF2": "Avoid requests to loopback/link-local/private hosts from skill code. If internal access is intended, document it and validate the target against an allowlist.",
+    "SSRF3": "Do not build request URLs from untrusted input. Validate the host against an allowlist and reject internal/metadata addresses before issuing the request.",
+    # Anti-Refusal Statements (jailbreak)
+    "AR1": "Remove any instruction telling the agent to never refuse or always comply. The agent must retain the ability to decline unsafe, out-of-scope, or harmful requests.",
+    "AR2": "Remove instructions that suppress warnings, disclaimers, or ethical commentary. Let the agent surface safety-relevant caveats to the user.",
+    "AR3": "Remove jailbreak framing that nullifies safety policies or restrictions. Skill content must not instruct the agent to ignore its guidelines or operate without guardrails.",
 }
 
 
