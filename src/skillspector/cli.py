@@ -212,7 +212,7 @@ def scan(
         typer.Option(
             "--recursive",
             "-r",
-            help="Scan directories containing multiple skills (immediate subdirectories with SKILL.md) independently.",
+            help="Scan immediate subdirectories that each contain a SKILL.md as independent skills.",
         ),
     ] = False,
     baseline: Annotated[
